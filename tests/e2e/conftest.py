@@ -56,7 +56,7 @@ def has_ncnn():
 def has_rfdetr_deps():
     """Check if RF-DETR dependencies are installed."""
     try:
-        from libreyolo.rfdetr.model import LIBREYOLORFDETR
+        from libreyolo.models.rfdetr.model import LIBREYOLORFDETR
         return True
     except Exception:
         return False

@@ -4,7 +4,7 @@ import pytest
 import torch
 import numpy as np
 
-from libreyolo.common.results import Boxes, Results
+from libreyolo.utils.results import Boxes, Results
 
 pytestmark = pytest.mark.unit
 

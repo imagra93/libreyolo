@@ -19,7 +19,7 @@ from ..utils.image_loader import ImageLoader
 from ..utils.results import Boxes, Results
 
 # Import YOLOX-specific preprocessing (BGR, 0-255 range)
-from ..yolox.utils import preprocess_image as preprocess_yolox
+from ..models.yolox.utils import preprocess_image as preprocess_yolox
 
 # ImageNet normalization constants (for RF-DETR)
 _IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(3, 1, 1)

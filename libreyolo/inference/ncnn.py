@@ -14,7 +14,7 @@ from ..utils.general import preprocess_image, get_safe_stem, COCO_CLASSES
 from ..utils.drawing import draw_boxes
 from ..utils.image_loader import ImageLoader
 from ..utils.results import Boxes, Results
-from ..yolox.utils import preprocess_image as yolox_preprocess_image
+from ..models.yolox.utils import preprocess_image as yolox_preprocess_image
 
 
 def _nms(boxes: np.ndarray, scores: np.ndarray, iou_threshold: float = 0.45) -> list:

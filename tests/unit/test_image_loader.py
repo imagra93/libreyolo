@@ -11,7 +11,7 @@ import pytest
 import torch
 from PIL import Image
 
-from libreyolo.common.image_loader import ImageLoader
+from libreyolo.utils.image_loader import ImageLoader
 
 
 @pytest.mark.unit
@@ -283,8 +283,8 @@ class TestImageLoader:
         
         # Clear the cached import if any
         import importlib
-        import libreyolo.common.image_loader
-        importlib.reload(libreyolo.common.image_loader)
+        import libreyolo.utils.image_loader
+        importlib.reload(libreyolo.utils.image_loader)
         
         # This test is tricky because requests might be installed
         # Just verify the URL detection works
@@ -298,7 +298,7 @@ class TestImageLoaderIntegration:
     
     def test_preprocess_image_accepts_all_formats(self, tmp_path):
         """Test that preprocess_image works with various input formats."""
-        from libreyolo.common.utils import preprocess_image
+        from libreyolo.utils.general import preprocess_image
         
         # Create a test image
         img = Image.new("RGB", (100, 100), color=(255, 0, 0))

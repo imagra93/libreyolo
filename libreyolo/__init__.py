@@ -1,65 +1,70 @@
-"""
-Libre YOLO - An open source YOLO library with MIT license.
-"""
+"""Libre YOLO — open source YOLO library with MIT license."""
 from importlib.metadata import version, PackageNotFoundError
-
-from .models import LIBREYOLO, LIBREYOLOX, LIBREYOLO9
-
-# Lazy import for RF-DETR to avoid dependency issues
-def __getattr__(name):
-    if name == "LIBREYOLORFDETR":
-        from .models import _ensure_rfdetr
-        _ensure_rfdetr()
-        from .models.rfdetr.model import LIBREYOLORFDETR
-        return LIBREYOLORFDETR
-    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
-from .export import Exporter
-from .inference.onnx import LIBREYOLOOnnx
-from .inference.openvino import LIBREYOLOOpenVINO
-from .utils.results import Results, Boxes
-# CAM/GradCAM removed
-from .validation import (
-    ValidationConfig,
-    BaseValidator,
-    DetectionValidator,
-    DetMetrics,
-)
-from .data import (
-    DATASETS_DIR,
-    load_data_config,
-    check_dataset,
-)
-
 from pathlib import Path as _Path
+
+# Core API — always available
+from .models import LIBREYOLO, LIBREYOLOX, LIBREYOLO9
+from .utils.results import Results, Boxes
+
 SAMPLE_IMAGE = str(_Path(__file__).parent / "assets" / "parkour.jpg")
 
 try:
     __version__ = version("libreyolo")
 except PackageNotFoundError:
-    __version__ = "0.0.0.dev0"  # Fallback for editable installs without metadata
+    __version__ = "0.0.0.dev0"
+
+
+# Lazy imports for optional/heavy modules
+def __getattr__(name):
+    _lazy = {
+        "LIBREYOLORFDETR": (".models.rfdetr.model", "LIBREYOLORFDETR"),
+        "LIBREYOLOOnnx": (".inference.onnx", "LIBREYOLOOnnx"),
+        "LIBREYOLOOpenVINO": (".inference.openvino", "LIBREYOLOOpenVINO"),
+        "LIBREYOLOTensorRT": (".inference.tensorrt", "LIBREYOLOTensorRT"),
+        "LIBREYOLONCNN": (".inference.ncnn", "LIBREYOLONCNN"),
+        "Exporter": (".export", "Exporter"),
+        "DetectionValidator": (".validation", "DetectionValidator"),
+        "ValidationConfig": (".validation", "ValidationConfig"),
+        "BaseValidator": (".validation", "BaseValidator"),
+        "DetMetrics": (".validation", "DetMetrics"),
+        "DATASETS_DIR": (".data", "DATASETS_DIR"),
+        "load_data_config": (".data", "load_data_config"),
+        "check_dataset": (".data", "check_dataset"),
+    }
+    if name == "LIBREYOLORFDETR":
+        # RF-DETR needs dependency check before import
+        from .models import _ensure_rfdetr
+        _ensure_rfdetr()
+    if name in _lazy:
+        import importlib
+        module_path, attr = _lazy[name]
+        mod = importlib.import_module(module_path, package=__name__)
+        return getattr(mod, attr)
+    raise AttributeError(f"module 'libreyolo' has no attribute '{name}'")
+
 
 __all__ = [
-    # Export
-    "Exporter",
     # Main API
     "LIBREYOLO",
     "LIBREYOLO9",
     "LIBREYOLOX",
     "LIBREYOLORFDETR",
-    "LIBREYOLOOnnx",
-    "LIBREYOLOOpenVINO",
     # Results
     "Results",
     "Boxes",
-    # Validation
+    # Assets
+    "SAMPLE_IMAGE",
+    # Lazy-loaded
+    "LIBREYOLOOnnx",
+    "LIBREYOLOOpenVINO",
+    "LIBREYOLOTensorRT",
+    "LIBREYOLONCNN",
+    "Exporter",
+    "DetectionValidator",
     "ValidationConfig",
     "BaseValidator",
-    "DetectionValidator",
     "DetMetrics",
-    # Data utilities
     "DATASETS_DIR",
     "load_data_config",
     "check_dataset",
-    # Assets
-    "SAMPLE_IMAGE",
 ]

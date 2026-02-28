@@ -50,7 +50,7 @@ def _patch_focus_for_ncnn(nn_model):
 
     patches = []
     try:
-        from ..yolox.nn import Focus
+        from ..models.yolox.nn import Focus
     except ImportError:
         return patches
 
