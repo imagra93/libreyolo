@@ -15,11 +15,14 @@ from PIL import Image
 from ..base import LibreYOLOBase
 from ...utils.image_loader import ImageInput
 from ...utils.general import preprocess_image
-from .nn import LibreYOLO9Model, DDetect, V9_CONFIGS
+from .nn import LibreYOLO9Model, DDetect, YOLO9_CONFIGS
 from .utils import postprocess
+from ...validation.preprocessors import YOLO9ValPreprocessor
 
 
 class LIBREYOLO9(LibreYOLOBase):
+
+    val_preprocessor_class = YOLO9ValPreprocessor
 
     # =========================================================================
     # REGISTRY CLASSMETHODS — used by LIBREYOLO() factory
@@ -59,7 +62,7 @@ class LIBREYOLO9(LibreYOLOBase):
     def detect_nb_classes(cls, weights_dict: dict) -> Optional[int]:
         """Detect number of classes from YOLOv9 state dict."""
         for key, tensor in weights_dict.items():
-            if re.match(r'(?:head|detect)\.cv3\.\d+\.2\.weight', key):
+            if re.match(r'head\.cv3\.\d+\.2\.weight', key):
                 return tensor.shape[0]
         return None
 
@@ -174,13 +177,6 @@ class LIBREYOLO9(LibreYOLOBase):
         """Use non-strict loading for YOLOv9 to handle profiling artifacts in weights."""
         return False
 
-    def _get_val_preprocessor(self, img_size: int = None):
-        """YOLOv9 uses letterbox + normalization (0-1 range)."""
-        from libreyolo.validation.preprocessors import V9ValPreprocessor
-        if img_size is None:
-            img_size = 640
-        return V9ValPreprocessor(img_size=(img_size, img_size))
-
     def _rebuild_for_new_classes(self, new_nc: int):
         """Replace only the final classification layers for different number of classes.
 
@@ -189,7 +185,7 @@ class LIBREYOLO9(LibreYOLOBase):
         """
         self.nb_classes = new_nc
         self.model.nc = new_nc
-        detect = self.model.detect
+        detect = self.model.head
         detect.nc = new_nc
         detect.no = new_nc + detect.reg_max * 4
 
@@ -286,8 +282,8 @@ class LIBREYOLO9(LibreYOLOBase):
             ... )
             >>> print(f"Best mAP: {results['best_mAP50_95']:.3f}")
         """
-        from .trainer import V9Trainer
-        from .config import V9TrainConfig
+        from .trainer import YOLO9Trainer
+        from .config import YOLO9TrainConfig
         from libreyolo.data import load_data_config
 
         # Load and validate data config
@@ -303,7 +299,7 @@ class LIBREYOLO9(LibreYOLOBase):
             self._rebuild_for_new_classes(yaml_nc)
 
         # Create training config
-        config = V9TrainConfig(
+        config = YOLO9TrainConfig(
             size=self.size,
             num_classes=self.nb_classes,
             reg_max=self.reg_max,
@@ -336,7 +332,7 @@ class LIBREYOLO9(LibreYOLOBase):
                 torch.cuda.manual_seed_all(seed)
 
         # Create trainer (pass wrapper model for validation)
-        trainer = V9Trainer(model=self.model, config=config, wrapper_model=self)
+        trainer = YOLO9Trainer(model=self.model, config=config, wrapper_model=self)
 
         # Resume if requested
         if resume:

@@ -192,11 +192,7 @@ class Exporter:
         # --- set export mode for models that support it ---
         original_export = None
         export_attr = None  # which attribute holds the export flag
-        if hasattr(nn_model, 'detect') and hasattr(nn_model.detect, 'export'):
-            export_attr = 'detect'
-            original_export = nn_model.detect.export
-            nn_model.detect.export = True
-        elif hasattr(nn_model, 'head') and hasattr(nn_model.head, 'export'):
+        if hasattr(nn_model, 'head') and hasattr(nn_model.head, 'export'):
             export_attr = 'head'
             original_export = nn_model.head.export
             nn_model.head.export = True

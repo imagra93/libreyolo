@@ -447,8 +447,8 @@ class DDetect(nn.Module):
     def _get_loss_fn(self, device):
         """Lazily initialize loss function for training."""
         if self._loss_fn is None:
-            from .loss import YOLOv9Loss
-            self._loss_fn = YOLOv9Loss(
+            from .loss import YOLO9Loss
+            self._loss_fn = YOLO9Loss(
                 num_classes=self.nc,
                 reg_max=self.reg_max,
                 strides=self.stride.tolist(),
@@ -549,7 +549,7 @@ class DDetect(nn.Module):
 
 # YOLOv9 configurations - exact channel dimensions from official YOLO configs
 # Each variant has unique, non-linear channel structures
-V9_CONFIGS = {
+YOLO9_CONFIGS = {
     't': {  # Tiny
         # Backbone: Conv(16) -> Conv(32) -> ELAN(32) -> [AConv -> RepNCSPELAN] x3
         'conv0_out': 16,
@@ -572,7 +572,7 @@ V9_CONFIGS = {
         'neck_down2_out': 64,        # AConv after P4
         'neck_elan_down2': (128, 128), # P5: out=128, part=128
         # Detection head channels
-        'detect_channels': (64, 96, 128),  # P3, P4, P5
+        'head_channels': (64, 96, 128),  # P3, P4, P5
     },
     's': {  # Small
         # Backbone: Conv(32) -> Conv(64) -> ELAN(64) -> [AConv -> RepNCSPELAN] x3
@@ -596,7 +596,7 @@ V9_CONFIGS = {
         'neck_down2_out': 128,
         'neck_elan_down2': (256, 256),
         # Detection
-        'detect_channels': (128, 192, 256),
+        'head_channels': (128, 192, 256),
     },
     'm': {  # Medium
         # Backbone: Conv(32) -> Conv(64) -> RepNCSPELAN(128) -> [AConv -> RepNCSPELAN] x3
@@ -621,7 +621,7 @@ V9_CONFIGS = {
         'neck_down2_out': 240,
         'neck_elan_down2': (480, 480),
         # Detection
-        'detect_channels': (240, 360, 480),
+        'head_channels': (240, 360, 480),
     },
     'c': {  # Compact (largest)
         # Backbone: Conv(64) -> Conv(128) -> RepNCSPELAN(256) -> [ADown -> RepNCSPELAN] x3
@@ -646,7 +646,7 @@ V9_CONFIGS = {
         'neck_down2_out': 512,
         'neck_elan_down2': (512, 512),
         # Detection
-        'detect_channels': (256, 512, 512),
+        'head_channels': (256, 512, 512),
     },
 }
 
@@ -662,7 +662,7 @@ class Backbone9(nn.Module):
     def __init__(self, config='c'):
         super().__init__()
 
-        cfg = V9_CONFIGS[config]
+        cfg = YOLO9_CONFIGS[config]
         self.config = config
 
         # Stem
@@ -761,7 +761,7 @@ class Neck9(nn.Module):
     def __init__(self, config='c'):
         super().__init__()
 
-        cfg = V9_CONFIGS[config]
+        cfg = YOLO9_CONFIGS[config]
         self.config = config
         n = cfg['repeat_num']
 
@@ -842,24 +842,24 @@ class LibreYOLO9Model(nn.Module):
         """
         super().__init__()
 
-        if config not in V9_CONFIGS:
-            raise ValueError(f"Invalid config: {config}. Must be one of: {list(V9_CONFIGS.keys())}")
+        if config not in YOLO9_CONFIGS:
+            raise ValueError(f"Invalid config: {config}. Must be one of: {list(YOLO9_CONFIGS.keys())}")
 
         self.config = config
         self.nc = nb_classes
         self.reg_max = reg_max
         self.img_size = img_size
 
-        cfg = V9_CONFIGS[config]
+        cfg = YOLO9_CONFIGS[config]
 
         self.backbone = Backbone9(config)
         self.neck = Neck9(config)
 
         # Detection head - use exact channels from config
-        detect_channels = cfg['detect_channels']
-        self.detect = DDetect(
+        head_channels = cfg['head_channels']
+        self.head = DDetect(
             nc=nb_classes,
-            ch=detect_channels,
+            ch=head_channels,
             reg_max=reg_max,
             stride=(8, 16, 32)
         )
@@ -888,11 +888,11 @@ class LibreYOLO9Model(nn.Module):
         if self.training and targets is not None:
             # Pass image size for anchor generation
             img_size = (x.shape[3], x.shape[2])  # (W, H)
-            output = self.detect([n3, n4, n5], targets=targets, img_size=img_size)
+            output = self.head([n3, n4, n5], targets=targets, img_size=img_size)
             return output
 
         # Normal forward (training without targets or inference)
-        output = self.detect([n3, n4, n5])
+        output = self.head([n3, n4, n5])
 
         if self.training:
             # Return raw outputs for loss calculation
@@ -902,7 +902,7 @@ class LibreYOLO9Model(nn.Module):
         y, x_list = output
 
         # Export mode: return only the prediction tensor for ONNX/TorchScript
-        if self.detect.export:
+        if self.head.export:
             return y
 
         # Return in format compatible with postprocessing
