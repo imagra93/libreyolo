@@ -20,6 +20,32 @@ from ...validation.preprocessors import YOLOXValPreprocessor
 
 
 class LIBREYOLOX(LibreYOLOBase):
+    """
+    YOLOX model for object detection.
+
+    Args:
+        model_path: Model weights source. Can be:
+            - str: Path to a .pt/.pth weights file
+            - dict: Pre-loaded state_dict (e.g., from torch.load())
+            - None: Random initialization for training from scratch
+        size: Model size variant. Must be one of: "nano", "tiny", "s", "m", "l", "x"
+        nb_classes: Number of classes (default: 80 for COCO)
+        device: Device for inference.
+
+    Examples:
+        Load weights for inference (prefer LIBREYOLO factory for auto-detection)::
+
+            >>> from libreyolo import LIBREYOLO
+            >>> model = LIBREYOLO("libreyoloXs.pt")
+            >>> detections = model(image="image.jpg", save=True)
+
+        Create a fresh model for training (nb_classes read from YAML)::
+
+            >>> model = LIBREYOLOX(size="s")
+            >>> results = model.train(data="coco128.yaml", epochs=100)
+    """
+
+    val_preprocessor_class = YOLOXValPreprocessor
 
     # =========================================================================
     # REGISTRY CLASSMETHODS — used by LIBREYOLO() factory
@@ -52,32 +78,6 @@ class LIBREYOLOX(LibreYOLOBase):
         return m.group(1) if m else None
 
     # =========================================================================
-    """
-    YOLOX model for object detection.
-
-    Args:
-        model_path: Model weights source. Can be:
-            - str: Path to a .pt/.pth weights file
-            - dict: Pre-loaded state_dict (e.g., from torch.load())
-            - None: Random initialization for training from scratch
-        size: Model size variant. Must be one of: "nano", "tiny", "s", "m", "l", "x"
-        nb_classes: Number of classes (default: 80 for COCO)
-        device: Device for inference.
-
-    Examples:
-        Load weights for inference (prefer LIBREYOLO factory for auto-detection)::
-
-            >>> from libreyolo import LIBREYOLO
-            >>> model = LIBREYOLO("libreyoloXs.pt")
-            >>> detections = model(image="image.jpg", save=True)
-
-        Create a fresh model for training (nb_classes read from YAML)::
-
-            >>> model = LIBREYOLOX(size="s")
-            >>> results = model.train(data="coco128.yaml", epochs=100)
-    """
-
-    val_preprocessor_class = YOLOXValPreprocessor
 
     # Default input sizes for different model variants
     DEFAULT_INPUT_SIZES = {

@@ -45,9 +45,6 @@ _COCO91_TO_COCO80 = {
 
 
 class LIBREYOLORFDETR(LibreYOLOBase):
-
-    val_preprocessor_class = RFDETRValPreprocessor
-
     """
     LibreYOLO RF-DETR model for object detection.
 
@@ -75,6 +72,8 @@ class LIBREYOLORFDETR(LibreYOLOBase):
         >>> model = LIBREYOLORFDETR(model_path="custom_weights.pth", size="s")
         >>> detections = model.predict("path/to/image.jpg", conf_thres=0.5)
     """
+
+    val_preprocessor_class = RFDETRValPreprocessor
 
     # =========================================================================
     # REGISTRY CLASSMETHODS — used by LIBREYOLO() factory

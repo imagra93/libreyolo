@@ -15,12 +15,30 @@ from PIL import Image
 from ..base import LibreYOLOBase
 from ...utils.image_loader import ImageInput
 from ...utils.general import preprocess_image
-from .nn import LibreYOLO9Model, DDetect, YOLO9_CONFIGS
+from .nn import LibreYOLO9Model
 from .utils import postprocess
 from ...validation.preprocessors import YOLO9ValPreprocessor
 
 
 class LIBREYOLO9(LibreYOLOBase):
+    """
+    LibreYOLO9 model for object detection.
+
+    Args:
+        model_path: Model weights source. Can be:
+            - str: Path to a .pt/.pth weights file
+            - dict: Pre-loaded state_dict (e.g., from torch.load())
+        size: Model size variant (required). Must be one of: "t", "s", "m", "c"
+        reg_max: Regression max value for DFL (default: 16)
+        nb_classes: Number of classes (default: 80 for COCO)
+        device: Device for inference. "auto" uses CUDA if available, else MPS, else CPU.
+
+    Example:
+        >>> model = LIBREYOLO9(model_path="path/to/weights.pt", size="s")
+        >>> detections = model(image=image_path, save=True)
+        >>> # Use tiling for large images
+        >>> detections = model(image=large_image_path, save=True, tiling=True)
+    """
 
     val_preprocessor_class = YOLO9ValPreprocessor
 
@@ -73,24 +91,6 @@ class LIBREYOLO9(LibreYOLOBase):
         return m.group(1) if m else None
 
     # =========================================================================
-    """
-    LibreYOLO9 model for object detection.
-
-    Args:
-        model_path: Model weights source. Can be:
-            - str: Path to a .pt/.pth weights file
-            - dict: Pre-loaded state_dict (e.g., from torch.load())
-        size: Model size variant (required). Must be one of: "t", "s", "m", "c"
-        reg_max: Regression max value for DFL (default: 16)
-        nb_classes: Number of classes (default: 80 for COCO)
-        device: Device for inference. "auto" uses CUDA if available, else MPS, else CPU.
-
-    Example:
-        >>> model = LIBREYOLO9(model_path="path/to/weights.pt", size="s")
-        >>> detections = model(image=image_path, save=True)
-        >>> # Use tiling for large images
-        >>> detections = model(image=large_image_path, save=True, tiling=True)
-    """
 
     def __init__(
         self,
