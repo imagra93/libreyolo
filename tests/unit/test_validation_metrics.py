@@ -8,8 +8,8 @@ import numpy as np
 import pytest
 import torch
 
-from libreyolo.validation import (
-    DetMetrics,
+from libreyolo.validation import DetMetrics
+from libreyolo.validation.utils import (
     match_predictions_to_gt,
     process_batch,
     xywh_to_xyxy,
