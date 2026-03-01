@@ -11,38 +11,8 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import cv2
 import numpy as np
-import yaml
 import torch
 from torch.utils.data import Dataset, DataLoader
-
-
-def load_data_config(data_path: str) -> Dict:
-    """
-    Load data configuration from YAML file.
-
-    Expected format:
-    ```yaml
-    path: /path/to/dataset  # dataset root
-    train: images/train     # train images (relative to path)
-    val: images/val         # val images (relative to path)
-    nc: 80                  # number of classes
-    names: ['person', 'bicycle', ...]  # class names
-    ```
-    """
-    with open(data_path, 'r') as f:
-        data = yaml.safe_load(f)
-
-    # Resolve paths
-    if 'path' in data:
-        root = Path(data['path'])
-        if not root.is_absolute():
-            # Relative to yaml file location
-            root = Path(data_path).parent / root
-        data['root'] = str(root.resolve())
-    else:
-        data['root'] = str(Path(data_path).parent)
-
-    return data
 
 
 class YOLODataset(Dataset):
