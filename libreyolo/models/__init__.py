@@ -98,7 +98,7 @@ def LibreYOLO(
         from ..backends.onnx import OnnxBackend
         return OnnxBackend(model_path, nb_classes=nb_classes or 80, device=device)
 
-    if model_path.endswith(".engine"):
+    if model_path.endswith((".engine", ".tensorrt")):
         from ..backends.tensorrt import TensorRTBackend
         return TensorRTBackend(model_path, nb_classes=nb_classes, device=device)
 
