@@ -1,8 +1,4 @@
-"""
-Export configuration handling.
-
-Provides loading and validation of export configuration from YAML files.
-"""
+"""Export configuration handling."""
 
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -13,6 +9,7 @@ import yaml
 @dataclass
 class DynamicBatchConfig:
     """Dynamic batching configuration."""
+
     enabled: bool = False
     min_batch: int = 1
     opt_batch: int = 1
@@ -22,6 +19,7 @@ class DynamicBatchConfig:
 @dataclass
 class Int8CalibrationConfig:
     """INT8 calibration configuration."""
+
     dataset: str = "coco5000.yaml"
     fraction: float = 0.1
     cache: bool = True
@@ -29,11 +27,7 @@ class Int8CalibrationConfig:
 
 @dataclass
 class TensorRTExportConfig:
-    """
-    TensorRT export configuration.
-
-    This class holds all configuration options for TensorRT engine export.
-    It can be loaded from a YAML file or created programmatically.
+    """TensorRT export configuration.
 
     Attributes:
         precision: Precision mode ('fp32', 'fp16', 'int8')
@@ -45,20 +39,21 @@ class TensorRTExportConfig:
         dynamic: Dynamic batching configuration
         int8_calibration: INT8 calibration settings
     """
+
     precision: str = "fp16"
     workspace: float = 4.0
     verbose: bool = False
     hardware_compatibility: str = "none"
     device: int = 0
     dynamic: DynamicBatchConfig = field(default_factory=DynamicBatchConfig)
-    int8_calibration: Int8CalibrationConfig = field(default_factory=Int8CalibrationConfig)
+    int8_calibration: Int8CalibrationConfig = field(
+        default_factory=Int8CalibrationConfig
+    )
 
     def __post_init__(self):
-        """Validate configuration after initialization."""
         self._validate()
 
     def _validate(self):
-        """Validate configuration values."""
         valid_precisions = ("fp32", "fp16", "int8")
         if self.precision not in valid_precisions:
             raise ValueError(
@@ -112,8 +107,9 @@ class TensorRTExportConfig:
         """
         path = Path(path)
         if not path.exists():
-            # Check in default config directory
-            default_path = Path(__file__).parent.parent / "cfg" / "export" / path.name
+            default_path = (
+                Path(__file__).parent.parent / "config" / "export" / path.name
+            )
             if default_path.exists():
                 path = default_path
             else:
@@ -135,7 +131,6 @@ class TensorRTExportConfig:
         Returns:
             TensorRTExportConfig instance.
         """
-        # Parse nested configs
         dynamic_data = data.get("dynamic", {})
         dynamic = DynamicBatchConfig(
             enabled=dynamic_data.get("enabled", False),
@@ -184,7 +179,7 @@ class TensorRTExportConfig:
 
 
 def load_export_config(
-    config: Optional[Union[str, Path, dict, TensorRTExportConfig]] = None
+    config: Optional[Union[str, Path, dict, TensorRTExportConfig]] = None,
 ) -> TensorRTExportConfig:
     """
     Load export configuration from various sources.
@@ -222,5 +217,4 @@ def load_export_config(
     )
 
 
-# Default configuration instance
 DEFAULT_CONFIG = TensorRTExportConfig()

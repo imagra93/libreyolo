@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 import yaml
 
-from libreyolo.export.exporter import Exporter
+from libreyolo.export.exporter import BaseExporter, NcnnExporter
 
 pytestmark = pytest.mark.unit
 
@@ -17,6 +17,7 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 class _TinyModel(nn.Module):
     """Minimal model for export tests (no real weights needed)."""
@@ -35,7 +36,7 @@ class _TinyModel(nn.Module):
 
 
 def _make_wrapper(nb_classes=4, model_name="TESTYOLO", size="s", input_size=32):
-    """Build a mock LibreYOLOBase-like wrapper around _TinyModel."""
+    """Build a mock BaseModel-like wrapper around _TinyModel."""
     wrapper = MagicMock()
     wrapper.model = _TinyModel()
     wrapper.model.eval()
@@ -54,17 +55,16 @@ def _make_wrapper(nb_classes=4, model_name="TESTYOLO", size="s", input_size=32):
 
 
 class TestNCNNFormatRegistration:
-    """Test ncnn format is properly registered in Exporter."""
+    """Test ncnn format is properly registered."""
 
     def test_ncnn_format_registered(self):
-        """Verify ncnn is in supported formats."""
-        assert "ncnn" in Exporter.FORMATS
+        """Verify ncnn is in registry."""
+        assert "ncnn" in BaseExporter._registry
 
     def test_ncnn_format_config(self):
         """Verify ncnn format configuration."""
-        fmt = Exporter.FORMATS["ncnn"]
-        assert fmt["suffix"] == "_ncnn"
-        assert fmt["requires"] is None
+        assert NcnnExporter.suffix == "_ncnn"
+        assert NcnnExporter.requires_onnx is False
 
 
 class TestNCNNAvailabilityCheck:
@@ -73,7 +73,8 @@ class TestNCNNAvailabilityCheck:
     def test_check_ncnn_export_raises_helpful_error(self):
         """Verify helpful error message when pnnx not installed."""
         try:
-            import pnnx
+            import pnnx  # noqa: F401
+
             pytest.skip("pnnx is installed, skipping missing pnnx test")
         except ImportError:
             pass
@@ -93,25 +94,16 @@ class TestNCNNOutputPathGeneration:
 
     def test_auto_path_ncnn(self):
         """ncnn export should generate path with _ncnn suffix."""
-        wrapper = _make_wrapper(model_name="LIBREYOLO9", size="t")
-        exporter = Exporter(wrapper)
-
-        # Verify the auto-generated path would include _ncnn
-        fmt_info = Exporter.FORMATS["ncnn"]
-        expected_suffix = fmt_info["suffix"]
-        assert expected_suffix == "_ncnn"
+        wrapper = _make_wrapper(model_name="yolo9", size="t")
+        exporter = NcnnExporter(wrapper)
+        assert exporter.suffix == "_ncnn"
 
     def test_fp16_suffix_in_auto_path(self):
         """FP16 ncnn export should include _fp16 in auto-generated filename."""
         wrapper = _make_wrapper(model_name="TESTYOLO", size="s")
-        exporter = Exporter(wrapper)
-
-        # Build what the auto path would be for ncnn + fp16
-        model_name = wrapper._get_model_name().lower()
-        size = wrapper.size
-        fmt_info = Exporter.FORMATS["ncnn"]
-        expected = f"weights/{model_name}_{size}_fp16{fmt_info['suffix']}"
-        assert "_fp16_ncnn" in expected
+        exporter = NcnnExporter(wrapper)
+        path = exporter._auto_output_path(half=True, int8=False)
+        assert "_fp16_ncnn" in path
 
 
 class TestNCNNMetadataYAML:
@@ -123,7 +115,7 @@ class TestNCNNMetadataYAML:
 
         metadata = {
             "libreyolo_version": "0.1.5",
-            "model_family": "LIBREYOLO9",
+            "model_family": "yolo9",
             "model_size": "t",
             "nb_classes": 80,
             "names": {"0": "person", "1": "bicycle"},
@@ -142,7 +134,7 @@ class TestNCNNMetadataYAML:
             with open(metadata_path) as f:
                 loaded = yaml.safe_load(f)
 
-            assert loaded["model_family"] == "LIBREYOLO9"
+            assert loaded["model_family"] == "yolo9"
             assert loaded["model_size"] == "t"
             assert loaded["nb_classes"] == 80
             assert loaded["precision"] == "fp32"
@@ -158,14 +150,15 @@ class TestNCNNExportValidation:
     def test_ncnn_export_fails_without_pnnx(self):
         """ncnn export without pnnx should raise ImportError."""
         try:
-            import pnnx
+            import pnnx  # noqa: F401
+
             pytest.skip("pnnx is installed, skipping missing pnnx test")
         except ImportError:
             pass
 
         wrapper = _make_wrapper()
-        exporter = Exporter(wrapper)
+        exporter = NcnnExporter(wrapper)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             with pytest.raises(ImportError, match="pnnx"):
-                exporter("ncnn", output_path=str(Path(tmpdir) / "model_ncnn"))
+                exporter(output_path=str(Path(tmpdir) / "model_ncnn"))

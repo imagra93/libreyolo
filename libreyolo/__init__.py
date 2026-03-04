@@ -1,72 +1,71 @@
-"""
-Libre YOLO - An open source YOLO library with MIT license.
-"""
+"""Libre YOLO — open source YOLO library with MIT license."""
+
 from importlib.metadata import version, PackageNotFoundError
-
-from .v9.model import LIBREYOLO9
-from .yolox.model import LIBREYOLOX
-from .factory import LIBREYOLO, create_model
-
-# Lazy import for RF-DETR to avoid dependency issues
-def __getattr__(name):
-    if name == "LIBREYOLORFDETR":
-        import importlib.util
-        if importlib.util.find_spec("rfdetr") is None:
-            raise ModuleNotFoundError(
-                "RF-DETR support requires extra dependencies.\n"
-                "Install with: pip install libreyolo[rfdetr]"
-            )
-        from .rfdetr.model import LIBREYOLORFDETR
-        return LIBREYOLORFDETR
-    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
-from .export import Exporter
-from .common.onnx import LIBREYOLOOnnx
-from .common.openvino import LIBREYOLOOpenVINO
-from .common.results import Results, Boxes
-# CAM/GradCAM removed
-from .validation import (
-    ValidationConfig,
-    BaseValidator,
-    DetectionValidator,
-    DetMetrics,
-)
-from .data import (
-    DATASETS_DIR,
-    load_data_config,
-    check_dataset,
-)
-
 from pathlib import Path as _Path
+
+# Core API — always available
+from .models import LibreYOLO, LibreYOLOX, LibreYOLO9
+from .utils.results import Results, Boxes
+
 SAMPLE_IMAGE = str(_Path(__file__).parent / "assets" / "parkour.jpg")
 
 try:
     __version__ = version("libreyolo")
 except PackageNotFoundError:
-    __version__ = "0.0.0.dev0"  # Fallback for editable installs without metadata
+    __version__ = "0.0.0.dev0"
+
+
+# Lazy imports for optional/heavy modules
+def __getattr__(name):
+    _lazy = {
+        "LibreYOLORFDETR": (".models.rfdetr.model", "LibreYOLORFDETR"),
+        "OnnxBackend": (".backends.onnx", "OnnxBackend"),
+        "OpenVINOBackend": (".backends.openvino", "OpenVINOBackend"),
+        "TensorRTBackend": (".backends.tensorrt", "TensorRTBackend"),
+        "NcnnBackend": (".backends.ncnn", "NcnnBackend"),
+        "BaseExporter": (".export", "BaseExporter"),
+        "DetectionValidator": (".validation", "DetectionValidator"),
+        "ValidationConfig": (".validation", "ValidationConfig"),
+        "DetMetrics": (".validation", "DetMetrics"),
+        "DATASETS_DIR": (".data", "DATASETS_DIR"),
+        "load_data_config": (".data", "load_data_config"),
+        "check_dataset": (".data", "check_dataset"),
+    }
+    if name == "LibreYOLORFDETR":
+        # RF-DETR needs dependency check before import
+        from .models import _ensure_rfdetr
+
+        _ensure_rfdetr()
+    if name in _lazy:
+        import importlib
+
+        module_path, attr = _lazy[name]
+        mod = importlib.import_module(module_path, package=__name__)
+        return getattr(mod, attr)
+    raise AttributeError(f"module 'libreyolo' has no attribute '{name}'")
+
 
 __all__ = [
-    # Export
-    "Exporter",
     # Main API
-    "LIBREYOLO",
-    "LIBREYOLO9",
-    "LIBREYOLOX",
-    "LIBREYOLORFDETR",
-    "LIBREYOLOOnnx",
-    "LIBREYOLOOpenVINO",
-    "create_model",
+    "LibreYOLO",
+    "LibreYOLO9",
+    "LibreYOLOX",
+    "LibreYOLORFDETR",
     # Results
     "Results",
     "Boxes",
-    # Validation
-    "ValidationConfig",
-    "BaseValidator",
+    # Assets
+    "SAMPLE_IMAGE",
+    # Lazy-loaded
+    "OnnxBackend",
+    "OpenVINOBackend",
+    "TensorRTBackend",
+    "NcnnBackend",
+    "BaseExporter",
     "DetectionValidator",
+    "ValidationConfig",
     "DetMetrics",
-    # Data utilities
     "DATASETS_DIR",
     "load_data_config",
     "check_dataset",
-    # Assets
-    "SAMPLE_IMAGE",
 ]

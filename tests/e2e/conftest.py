@@ -1,22 +1,39 @@
 """E2E test configuration and fixtures."""
 
+import gc
+import multiprocessing
+
 import pytest
 import torch
 
+# ---------------------------------------------------------------------------
+# Force 'spawn' multiprocessing to prevent CUDA + fork segfaults.
+#
+# Export tests (ONNX, TensorRT) initialise the CUDA context.  Training tests
+# then create DataLoader workers — with the default 'fork' start method on
+# Linux the workers inherit the parent's CUDA context, which is not fork-safe.
+# When those workers exit their stale CUDA cleanup can corrupt the parent
+# process, producing a segfault (typically exit code 139 / signal 11).
+#
+# 'spawn' starts workers from scratch so they never inherit CUDA state.
+# ---------------------------------------------------------------------------
+multiprocessing.set_start_method("spawn", force=True)
+
 
 def pytest_configure(config):
-    """Register custom markers."""
-    config.addinivalue_line("markers", "e2e: end-to-end tests requiring full model loading")
+    """Register custom markers (e2e marker registered in root conftest)."""
     config.addinivalue_line("markers", "tensorrt: tests requiring TensorRT")
     config.addinivalue_line("markers", "openvino: tests requiring OpenVINO")
     config.addinivalue_line("markers", "ncnn: tests requiring ncnn")
     config.addinivalue_line("markers", "rfdetr: tests requiring RF-DETR dependencies")
     config.addinivalue_line("markers", "slow: slow tests that may take several minutes")
+    config.addinivalue_line("markers", "rf5: RF5 training benchmark tests")
 
 
 # ---------------------------------------------------------------------------
 # Hardware detection
 # ---------------------------------------------------------------------------
+
 
 def has_cuda():
     """Check if CUDA is available."""
@@ -28,7 +45,8 @@ def has_tensorrt():
     if not has_cuda():
         return False
     try:
-        import tensorrt as trt
+        import tensorrt as trt  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -38,6 +56,7 @@ def has_openvino():
     """Check if OpenVINO is installed and usable."""
     try:
         import openvino as ov
+
         _ = ov.__version__
         return True
     except ImportError:
@@ -47,7 +66,8 @@ def has_openvino():
 def has_ncnn():
     """Check if ncnn is installed and usable."""
     try:
-        import ncnn
+        import ncnn  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -56,7 +76,8 @@ def has_ncnn():
 def has_rfdetr_deps():
     """Check if RF-DETR dependencies are installed."""
     try:
-        from libreyolo.rfdetr.model import LIBREYOLORFDETR
+        from libreyolo.models.rfdetr.model import LibreYOLORFDETR  # noqa: F401
+
         return True
     except Exception:
         return False
@@ -66,35 +87,161 @@ def has_rfdetr_deps():
 # Skip decorators
 # ---------------------------------------------------------------------------
 
-requires_cuda = pytest.mark.skipif(
-    not has_cuda(),
-    reason="CUDA not available"
-)
+requires_cuda = pytest.mark.skipif(not has_cuda(), reason="CUDA not available")
 
 requires_tensorrt = pytest.mark.skipif(
-    not has_tensorrt(),
-    reason="TensorRT not installed or CUDA not available"
+    not has_tensorrt(), reason="TensorRT not installed or CUDA not available"
 )
 
 requires_openvino = pytest.mark.skipif(
-    not has_openvino(),
-    reason="OpenVINO not installed (pip install openvino)"
+    not has_openvino(), reason="OpenVINO not installed (pip install openvino)"
 )
 
 requires_ncnn = pytest.mark.skipif(
-    not has_ncnn(),
-    reason="ncnn not installed (pip install libreyolo[ncnn])"
+    not has_ncnn(), reason="ncnn not installed (pip install libreyolo[ncnn])"
 )
 
 requires_rfdetr = pytest.mark.skipif(
     not has_rfdetr_deps(),
-    reason="RF-DETR dependencies not installed (pip install libreyolo[rfdetr])"
+    reason="RF-DETR dependencies not installed (pip install libreyolo[rfdetr])",
 )
+
+
+# ---------------------------------------------------------------------------
+# GPU helpers
+# ---------------------------------------------------------------------------
+
+
+def cuda_cleanup():
+    """Free GPU memory. Call after heavy tests."""
+    if torch.cuda.is_available():
+        gc.collect()
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+        gc.collect()
+        torch.cuda.empty_cache()
+
+
+# ---------------------------------------------------------------------------
+# Pre-spawned subprocess worker for CUDA isolation
+#
+# After hundreds of CUDA-heavy export + training tests, the CUDA driver state
+# in the main pytest process becomes corrupted.  Any fork() / posix_spawn()
+# from this process then triggers SIGSEGV (exit 139).
+#
+# Fix: fork a *worker* process at import time — before CUDA is ever used —
+# so its CUDA context stays pristine.  Later, run_in_subprocess() sends
+# commands to the worker via stdin/stdout pipes (no fork from the polluted
+# main process).  The worker creates fresh subprocesses from its clean state.
+# ---------------------------------------------------------------------------
+
+_WORKER_SCRIPT = r"""
+import json, os, subprocess, sys, tempfile
+
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    msg = json.loads(line)
+    script_text, timeout = msg["s"], msg["t"]
+
+    fd, path = tempfile.mkstemp(suffix=".py", prefix="ly_")
+    os.write(fd, script_text.encode())
+    os.close(fd)
+    try:
+        r = subprocess.run(
+            [sys.executable, path],
+            capture_output=True, text=True, timeout=timeout,
+        )
+        resp = {"rc": r.returncode, "o": r.stdout[-4000:], "e": r.stderr[-4000:]}
+    except subprocess.TimeoutExpired:
+        resp = {"rc": -1, "o": "", "e": f"Timed out after {timeout}s"}
+    except Exception as exc:
+        resp = {"rc": -1, "o": "", "e": str(exc)}
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+    sys.stdout.write(json.dumps(resp) + "\n")
+    sys.stdout.flush()
+"""
+
+
+def _start_worker():
+    """Start the subprocess worker. Called once at import time."""
+    import atexit
+    import subprocess as _sp
+    import sys as _sys
+    import tempfile as _tmp
+
+    fd, path = _tmp.mkstemp(suffix=".py", prefix="ly_worker_")
+    import os as _os
+
+    _os.write(fd, _WORKER_SCRIPT.encode())
+    _os.close(fd)
+
+    proc = _sp.Popen(
+        [_sys.executable, path],
+        stdin=_sp.PIPE,
+        stdout=_sp.PIPE,
+        stderr=_sp.DEVNULL,
+        text=True,
+    )
+
+    def _cleanup():
+        try:
+            proc.stdin.close()
+        except Exception:
+            pass
+        proc.wait(timeout=5)
+        try:
+            _os.unlink(path)
+        except OSError:
+            pass
+
+    atexit.register(_cleanup)
+    return proc
+
+
+_worker_proc = _start_worker()
+
+
+def run_in_subprocess(script: str, *, timeout: int = 300) -> str:
+    """Run Python code in a fresh subprocess via the pre-spawned worker.
+
+    The worker was forked at import time (clean CUDA state) and creates
+    child processes on demand — no fork from the polluted main process.
+    """
+    import json
+    import textwrap
+
+    msg = json.dumps({"s": textwrap.dedent(script), "t": timeout})
+    _worker_proc.stdin.write(msg + "\n")
+    _worker_proc.stdin.flush()
+
+    # Read response (blocking).  The +60 allows the worker to report a
+    # timeout rather than us killing it.
+    resp_line = _worker_proc.stdout.readline()
+    if not resp_line:
+        raise RuntimeError(
+            "Subprocess worker died unexpectedly.  Check stderr for details."
+        )
+
+    resp = json.loads(resp_line)
+    if resp["rc"] != 0:
+        raise RuntimeError(
+            f"Subprocess exited with code {resp['rc']}\n"
+            f"--- stdout (last 2000 chars) ---\n{resp['o'][-2000:]}\n"
+            f"--- stderr (last 2000 chars) ---\n{resp['e'][-2000:]}"
+        )
+    return resp["o"]
 
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(scope="session")
 def cuda_device():
@@ -125,6 +272,7 @@ def tensorrt_version():
         pytest.skip("TensorRT not available")
 
     import tensorrt as trt
+
     return trt.__version__
 
 
@@ -132,6 +280,7 @@ def tensorrt_version():
 def sample_image():
     """Get a sample image for inference tests."""
     from libreyolo import SAMPLE_IMAGE
+
     return SAMPLE_IMAGE
 
 
@@ -141,77 +290,97 @@ def temp_export_dir(tmp_path):
     return tmp_path / "exports"
 
 
+@pytest.fixture(autouse=True, scope="function")
+def cleanup_gpu_memory():
+    """Clear GPU memory before and after each test to prevent state corruption."""
+    yield
+    if torch.cuda.is_available():
+        gc.collect()
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+        gc.collect()
+        torch.cuda.empty_cache()
+
+
+@pytest.fixture(scope="class")
+def reset_gpu_state():
+    """Force GPU state reset between test classes (useful for RF-DETR training)."""
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+        gc.collect()
+    yield
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+        gc.collect()
+
+
 # ---------------------------------------------------------------------------
-# Model parameter sets
+# Model catalog — single source of truth
 # ---------------------------------------------------------------------------
 
-# YOLOX model sizes
-YOLOX_SIZES = ["nano", "tiny", "s", "m", "l", "x"]
-
-# YOLOv9 model sizes
-YOLOV9_SIZES = ["t", "s", "m", "c"]
-
-# RF-DETR model sizes
-RFDETR_SIZES = ["n", "s", "m", "l"]
-
-# Model weight file patterns
-YOLOX_WEIGHTS = {
-    "nano": "libreyoloXnano.pt",
-    "tiny": "libreyoloXtiny.pt",
-    "s": "libreyoloXs.pt",
-    "m": "libreyoloXm.pt",
-    "l": "libreyoloXl.pt",
-    "x": "libreyoloXx.pt",
-}
-
-YOLOV9_WEIGHTS = {
-    "t": "libreyolo9t.pt",
-    "s": "libreyolo9s.pt",
-    "m": "libreyolo9m.pt",
-    "c": "libreyolo9c.pt",
-}
-
-RFDETR_WEIGHTS = {
-    "n": "librerfdetrnano.pth",
-    "s": "librerfdetrsmall.pth",
-    "m": "librerfdetrmedium.pth",
-    "l": "librerfdetrlarge.pth",
-}
-
-# Quick test set (for CI - smallest models only)
-QUICK_TEST_MODELS = [
-    ("yolox", "nano"),
-    ("yolov9", "t"),
+# (family, size, weights)
+MODEL_CATALOG = [
+    ("yolox", "n", "LibreYOLOXn.pt"),
+    ("yolox", "t", "LibreYOLOXt.pt"),
+    ("yolox", "s", "LibreYOLOXs.pt"),
+    ("yolox", "m", "LibreYOLOXm.pt"),
+    ("yolox", "l", "LibreYOLOXl.pt"),
+    ("yolox", "x", "LibreYOLOXx.pt"),
+    ("yolo9", "t", "LibreYOLO9t.pt"),
+    ("yolo9", "s", "LibreYOLO9s.pt"),
+    ("yolo9", "m", "LibreYOLO9m.pt"),
+    ("yolo9", "c", "LibreYOLO9c.pt"),
+    ("rfdetr", "n", "LibreRFDETRn.pt"),
+    ("rfdetr", "s", "LibreRFDETRs.pt"),
+    ("rfdetr", "m", "LibreRFDETRm.pt"),
+    ("rfdetr", "l", "LibreRFDETRl.pt"),
 ]
 
-# Full test set (all models)
-FULL_TEST_MODELS = (
-    [("yolox", size) for size in YOLOX_SIZES] +
-    [("yolov9", size) for size in YOLOV9_SIZES]
-)
+# Derived lists (no manual maintenance)
+YOLOX_SIZES = [s for f, s, _ in MODEL_CATALOG if f == "yolox"]
+YOLO9_SIZES = [s for f, s, _ in MODEL_CATALOG if f == "yolo9"]
+RFDETR_SIZES = [s for f, s, _ in MODEL_CATALOG if f == "rfdetr"]
+
+ALL_MODELS = [(f, s) for f, s, _ in MODEL_CATALOG]
+ALL_MODELS_WITH_WEIGHTS = MODEL_CATALOG
+YOLOX_YOLO9_MODELS = [(f, s) for f, s, _ in MODEL_CATALOG if f != "rfdetr"]
+
+# Quick test set (for CI — smallest models only)
+QUICK_TEST_MODELS = [("yolox", "n"), ("yolo9", "t")]
+
+# Full test set (YOLOX + YOLO9, no RF-DETR)
+FULL_TEST_MODELS = YOLOX_YOLO9_MODELS
 
 # RF-DETR test set (separate due to dependency)
-RFDETR_TEST_MODELS = [("rfdetr", size) for size in RFDETR_SIZES]
+RFDETR_TEST_MODELS = [(f, s) for f, s, _ in MODEL_CATALOG if f == "rfdetr"]
 
 
-def get_model_weights(model_type: str, size: str) -> str:
-    """Get the weight file name for a model type and size."""
-    if model_type == "yolox":
-        return YOLOX_WEIGHTS[size]
-    elif model_type == "yolov9":
-        return YOLOV9_WEIGHTS[size]
-    elif model_type == "rfdetr":
-        return RFDETR_WEIGHTS[size]
-    else:
-        raise ValueError(f"Unknown model type: {model_type}")
+def get_model_weights(family: str, size: str) -> str:
+    """Get the weight file name for a model family and size."""
+    for f, s, w in MODEL_CATALOG:
+        if f == family and s == size:
+            return w
+    raise ValueError(f"Unknown model: {family}-{size}")
+
+
+def make_ids(models):
+    """Generate test IDs like 'yolox-n' from (family, size, ...) tuples."""
+    return [f"{m[0]}-{m[1]}" for m in models]
 
 
 # ---------------------------------------------------------------------------
 # Common utility functions for E2E tests
 # ---------------------------------------------------------------------------
 
+
 def compute_iou(box1, box2):
-    """Compute IoU between two boxes in xyxy format."""
+    """Compute IoU between two boxes in xyxy format.
+
+    Simple Python implementation for test utilities (no torch dependency).
+    For GPU-accelerated IoU, see libreyolo.utils.box_ops.
+    """
     x1 = max(box1[0], box2[0])
     y1 = max(box1[1], box2[1])
     x2 = min(box1[2], box2[2])
@@ -261,10 +430,10 @@ def match_detections(results1, results2, iou_threshold=0.5):
 
 def load_model(model_type: str, size: str, device: str = "cuda"):
     """Load a model by type and size."""
-    from libreyolo import LIBREYOLO
+    from libreyolo import LibreYOLO
 
     weights = get_model_weights(model_type, size)
-    return LIBREYOLO(weights, device=device)
+    return LibreYOLO(weights, device=device)
 
 
 def results_are_acceptable(
@@ -290,3 +459,98 @@ def results_are_acceptable(
         return True
 
     return False
+
+
+# ---------------------------------------------------------------------------
+# Shared export test helpers
+# ---------------------------------------------------------------------------
+
+
+def run_export_compare_test(
+    model_type,
+    size,
+    sample_image,
+    tmp_path,
+    format,
+    export_kwargs=None,
+    match_threshold=0.7,
+    device="cpu",
+):
+    """
+    Common export -> inference -> compare flow.
+
+    Returns (exported_path, pt_results, export_results).
+    """
+    from libreyolo import LibreYOLO
+
+    pt_model = load_model(model_type, size, device=device)
+    pt_results = pt_model(sample_image, conf=0.25)
+
+    export_path = str(tmp_path / f"{model_type}_{size}.{format}")
+    exported_path = pt_model.export(
+        format=format,
+        output_path=export_path,
+        **(export_kwargs or {}),
+    )
+
+    exported_model = LibreYOLO(exported_path, device=device)
+    export_results = exported_model(sample_image, conf=0.25)
+
+    match_rate, matched, total = match_detections(pt_results, export_results)
+    assert results_are_acceptable(
+        match_rate,
+        len(pt_results),
+        len(export_results),
+        threshold=match_threshold,
+    ), (
+        f"Results mismatch: PT={len(pt_results)}, {format}={len(export_results)}, "
+        f"matched={matched}/{total}, rate={match_rate:.2%}"
+    )
+
+    return exported_path, pt_results, export_results
+
+
+def run_consistency_test(
+    model_type,
+    size,
+    sample_image,
+    tmp_path,
+    format,
+    export_kwargs=None,
+    device="cpu",
+    n_runs=5,
+):
+    """Export model and verify consistent inference results across N runs."""
+    from libreyolo import LibreYOLO
+
+    pt_model = load_model(model_type, size, device=device)
+    export_path = str(tmp_path / f"{model_type}_{size}.{format}")
+    exported_path = pt_model.export(
+        format=format, output_path=export_path, **(export_kwargs or {})
+    )
+
+    model = LibreYOLO(exported_path, device=device)
+    results = [len(model(sample_image, conf=0.25)) for _ in range(n_runs)]
+    assert len(set(results)) == 1, f"Inconsistent results across runs: {results}"
+
+
+def run_metadata_round_trip_test(
+    model_type,
+    size,
+    tmp_path,
+    format,
+    export_kwargs=None,
+    device="cpu",
+):
+    """Export model and verify metadata is preserved when loading."""
+    from libreyolo import LibreYOLO
+
+    pt_model = load_model(model_type, size, device=device)
+    export_path = str(tmp_path / f"{model_type}_{size}.{format}")
+    exported_path = pt_model.export(
+        format=format, output_path=export_path, **(export_kwargs or {})
+    )
+
+    loaded_model = LibreYOLO(exported_path, device=device)
+    assert loaded_model.nb_classes == pt_model.nb_classes
+    assert loaded_model.names == pt_model.names

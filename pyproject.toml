@@ -14,7 +14,6 @@ dependencies = [
     "torch>=1.7.0",
     "torchvision>=0.11.0",
     "PyYAML>=6.0",
-    "matplotlib>=3.3.0",
     "requests>=2.25.0",
     "opencv-python>=4.11.0.86",
     "tqdm>=4.65.0",
@@ -25,29 +24,20 @@ dependencies = [
 dev = [
     "pytest>=9.0.2",
     "ruff>=0.14.10",
-    "jupyterlab>=4.3.1",
-    "onnx>=1.14.0",
-    "onnxruntime>=1.16.0",
+    "ty>=0.0.1",
 ]
 
 [project.optional-dependencies]
 onnx = [
     "onnx>=1.14.0",
     "onnxsim>=0.4.0",
-    "onnxscript>=0.1.0",
     "onnxruntime>=1.16.0",
 ]
 rfdetr = [
-    "rfdetr==1.4.1",
-    "transformers<5",
-    "timm>=0.9.0",
-    "supervision>=0.19.0",
+    "rfdetr>=1.4.1",
 ]
 tensorrt = [
-    # TensorRT requires manual installation as it depends on CUDA version
-    # Install with: pip install tensorrt (requires NVIDIA GPU + CUDA)
-    # For INT8 calibration, also install pycuda:
-    # pip install pycuda
+    "tensorrt",
     "pycuda>=2022.1",
 ]
 openvino = [
@@ -57,10 +47,17 @@ ncnn = [
     "pnnx",
     "ncnn",
 ]
+all = [
+    "libreyolo[onnx]",
+    "libreyolo[rfdetr]",
+    "libreyolo[tensorrt]",
+    "libreyolo[openvino]",
+    "libreyolo[ncnn]",
+]
 
 [project.urls]
-Homepage = "https://github.com/Libre-YOLO"
-Repository = "https://github.com/Libre-YOLO/libreyolo"
+Homepage = "https://github.com/LibreYOLO"
+Repository = "https://github.com/LibreYOLO/libreyolo"
 
 [tool.setuptools]
 include-package-data = true
@@ -74,6 +71,35 @@ include = ["libreyolo*"]
 [build-system]
 requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[tool.ty.rules]
+# Rules that catch real bugs — keep as errors
+invalid-parameter-default = "error"
+
+# Rules that produce false positives with PyTorch nn.Module dynamic attrs
+# and C extensions without type stubs (tensorrt, ncnn, pycuda).
+# Downgrade to warnings so they don't block CI but remain visible.
+unresolved-import = "warn"       # optional deps not installed in dev env
+unresolved-attribute = "warn"    # nn.Module.__getattr__, C extension members
+invalid-argument-type = "warn"   # torch.onnx.export kwargs, tensor ops
+not-subscriptable = "warn"       # tensor[int] operations
+unsupported-operator = "warn"    # tensor arithmetic
+not-iterable = "warn"            # Module/tensor iterations
+call-non-callable = "warn"       # Module.__call__
+invalid-method-override = "warn" # template method + nn.Module patterns
+invalid-assignment = "warn"      # nn.Module dynamic attrs, tensor ops
+invalid-return-type = "warn"     # torch return type inference
+index-out-of-bounds = "warn"     # tensor indexing
+unknown-argument = "warn"        # dynamic kwargs patterns
+no-matching-overload = "warn"    # torch overloaded functions
+possibly-missing-attribute = "warn"
+
+[[tool.ty.overrides]]
+include = ["vision_analysis_benchmark/**", "tests/**"]
+
+[tool.ty.overrides.rules]
+# Benchmark and test code: suppress all to avoid noise
+unresolved-import = "ignore"
 
 [tool.pytest.ini_options]
 addopts = "-m unit"

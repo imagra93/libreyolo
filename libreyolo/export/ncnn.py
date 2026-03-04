@@ -1,16 +1,8 @@
-"""
-ncnn export implementation via PNNX.
-
-Converts PyTorch models to ncnn format using PNNX (direct PyTorch-to-ncnn
-conversion). Falls back to ONNX-to-PNNX if direct tracing fails.
-
-Supports FP32 and FP16 precision modes.
-"""
+"""ncnn export implementation via PNNX."""
 
 import shutil
 import subprocess
 import tempfile
-import warnings
 from pathlib import Path
 from typing import Optional
 
@@ -50,7 +42,7 @@ def _patch_focus_for_ncnn(nn_model):
 
     patches = []
     try:
-        from ..yolox.nn import Focus
+        from ..models.yolox.nn import Focus
     except ImportError:
         return patches
 
@@ -73,7 +65,6 @@ def _patch_focus_for_ncnn(nn_model):
         for focus_idx, pu_idx in enumerate(perm):
             inv_perm[pu_idx] = focus_idx
 
-        # Save originals for restoration
         orig_forward = m.forward
         orig_weight = conv2d.weight.data.clone()
 
@@ -90,79 +81,6 @@ def _patch_focus_for_ncnn(nn_model):
         patches.append((m, orig_forward, conv2d, orig_weight))
 
     return patches
-
-
-def export_ncnn(
-    nn_model,
-    dummy,
-    *,
-    output_path: str,
-    half: bool = False,
-    opset: int = 13,
-    simplify: bool = True,
-    metadata: Optional[dict] = None,
-) -> str:
-    """
-    Export a PyTorch model to ncnn format via PNNX.
-
-    Tries direct PNNX conversion first (PyTorch -> ncnn). If that fails,
-    falls back to ONNX -> PNNX conversion.
-
-    The output is a directory containing model.ncnn.param, model.ncnn.bin,
-    and optionally metadata.yaml.
-
-    Args:
-        nn_model: PyTorch model (nn.Module) in eval mode.
-        dummy: Dummy input tensor for tracing.
-        output_path: Output directory for ncnn model files.
-        half: Export in FP16 precision (default: False).
-        opset: ONNX opset version for fallback path (default: 13).
-        simplify: Simplify ONNX graph in fallback path (default: True).
-        metadata: Optional dict of model metadata to save as metadata.yaml.
-
-    Returns:
-        Path to exported ncnn model directory.
-
-    Raises:
-        ImportError: If pnnx is not installed.
-        RuntimeError: If both direct and fallback export paths fail.
-    """
-    check_ncnn_export_available()
-
-    output_dir = Path(output_path)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Patch Focus layers to avoid strided slicing unsupported by ncnn
-    focus_patches = _patch_focus_for_ncnn(nn_model)
-
-    try:
-        try:
-            param_path, bin_path = _export_pnnx_direct(nn_model, dummy, output_dir, half)
-            print("ncnn export via direct PNNX succeeded")
-        except Exception as e:
-            print(f"Direct PNNX export failed ({e}), trying ONNX fallback...")
-            try:
-                param_path, bin_path = _export_onnx_fallback(
-                    nn_model, dummy, output_dir, half, opset, simplify
-                )
-                print("ncnn export via ONNX fallback succeeded")
-            except Exception as e2:
-                raise RuntimeError(
-                    f"ncnn export failed with both direct and ONNX paths.\n"
-                    f"Direct error: {e}\n"
-                    f"Fallback error: {e2}"
-                ) from e2
-    finally:
-        # Restore original Focus forward methods and conv weights
-        for m, orig_fwd, conv2d, orig_weight in focus_patches:
-            m.forward = orig_fwd
-            conv2d.weight.data = orig_weight
-
-    if metadata:
-        _save_metadata(output_dir, metadata)
-
-    print(f"ncnn export complete: {output_dir}")
-    return str(output_dir)
 
 
 def _export_pnnx_direct(nn_model, dummy, output_dir: Path, half: bool):
@@ -190,7 +108,6 @@ def _export_pnnx_direct(nn_model, dummy, output_dir: Path, half: bool):
         fp16_flag = 1 if half else 0
         pnnx.export(nn_model, str(temp_pt), dummy, fp16=fp16_flag)
 
-        # PNNX creates files alongside the .pt file
         src_param = tmpdir / "model.ncnn.param"
         src_bin = tmpdir / "model.ncnn.bin"
 
@@ -235,7 +152,7 @@ def _export_onnx_fallback(
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir = Path(tmpdir)
 
-        # Step 1: Export to ONNX (always FP32 — PNNX handles precision)
+        # Export to ONNX (always FP32 — PNNX handles precision)
         onnx_path = str(tmpdir / "model.onnx")
         export_onnx(
             nn_model,
@@ -248,15 +165,13 @@ def _export_onnx_fallback(
             metadata={},
         )
 
-        # Step 2: Call pnnx CLI on the ONNX file
+        # Call pnnx CLI on the ONNX file
         shape_str = str(list(dummy.shape)).replace(" ", "")
         cmd = ["pnnx", onnx_path, f"inputshape={shape_str}"]
         if half:
             cmd.append("fp16=1")
 
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, cwd=str(tmpdir)
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(tmpdir))
         if result.returncode != 0:
             raise RuntimeError(
                 f"pnnx CLI failed (exit code {result.returncode}):\n"
@@ -264,7 +179,6 @@ def _export_onnx_fallback(
                 f"stderr: {result.stderr}"
             )
 
-        # Find the generated ncnn files
         params = list(tmpdir.glob("*.ncnn.param"))
         bins = list(tmpdir.glob("*.ncnn.bin"))
         if not params or not bins:
@@ -289,3 +203,76 @@ def _save_metadata(output_dir: Path, metadata: dict) -> None:
     with open(metadata_path, "w") as f:
         yaml.dump(metadata, f, default_flow_style=False, sort_keys=False)
     print(f"Saved metadata: {metadata_path}")
+
+
+def export_ncnn(
+    nn_model,
+    dummy,
+    *,
+    output_path: str,
+    half: bool = False,
+    opset: int = 13,
+    simplify: bool = True,
+    metadata: Optional[dict] = None,
+) -> str:
+    """Export a PyTorch model to ncnn format via PNNX.
+
+    Tries direct PNNX conversion first (PyTorch -> ncnn). If that fails,
+    falls back to ONNX -> PNNX conversion.
+
+    The output is a directory containing model.ncnn.param, model.ncnn.bin,
+    and optionally metadata.yaml.
+
+    Args:
+        nn_model: PyTorch model (nn.Module) in eval mode.
+        dummy: Dummy input tensor for tracing.
+        output_path: Output directory for ncnn model files.
+        half: Export in FP16 precision (default: False).
+        opset: ONNX opset version for fallback path (default: 13).
+        simplify: Simplify ONNX graph in fallback path (default: True).
+        metadata: Optional dict of model metadata to save as metadata.yaml.
+
+    Returns:
+        Path to exported ncnn model directory.
+
+    Raises:
+        ImportError: If pnnx is not installed.
+        RuntimeError: If both direct and fallback export paths fail.
+    """
+    check_ncnn_export_available()
+
+    output_dir = Path(output_path)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Patch Focus layers to avoid strided slicing unsupported by ncnn
+    focus_patches = _patch_focus_for_ncnn(nn_model)
+
+    try:
+        try:
+            param_path, bin_path = _export_pnnx_direct(
+                nn_model, dummy, output_dir, half
+            )
+            print("ncnn export via direct PNNX succeeded")
+        except Exception as e:
+            print(f"Direct PNNX export failed ({e}), trying ONNX fallback...")
+            try:
+                param_path, bin_path = _export_onnx_fallback(
+                    nn_model, dummy, output_dir, half, opset, simplify
+                )
+                print("ncnn export via ONNX fallback succeeded")
+            except Exception as e2:
+                raise RuntimeError(
+                    f"ncnn export failed with both direct and ONNX paths.\n"
+                    f"Direct error: {e}\n"
+                    f"Fallback error: {e2}"
+                ) from e2
+    finally:
+        for m, orig_fwd, conv2d, orig_weight in focus_patches:
+            m.forward = orig_fwd
+            conv2d.weight.data = orig_weight
+
+    if metadata:
+        _save_metadata(output_dir, metadata)
+
+    print(f"ncnn export complete: {output_dir}")
+    return str(output_dir)
