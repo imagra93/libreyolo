@@ -25,6 +25,8 @@ class ValidationConfig:
         device: Device to use ("auto", "cuda", "mps", "cpu").
         save_dir: Directory to save results.
         save_json: Whether to save predictions in COCO JSON format.
+        save_plots: Whether to save validation plots (metrics bar, per-class AP,
+            confusion matrix, sample images). Default True.
         verbose: Whether to print detailed metrics.
         num_workers: Number of dataloader workers.
         half: Whether to use FP16 inference.
@@ -62,6 +64,7 @@ class ValidationConfig:
     # Output
     save_dir: Optional[str] = None
     save_json: bool = False
+    save_plots: bool = True
     verbose: bool = True
 
     # Workers
